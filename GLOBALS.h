@@ -1,4 +1,4 @@
-/* @copyright Copyright (c) 2023 Roger George Doss. All Rights Reserved.
+/* @copyright Copyright (c) 2023 Roger Doss. All Rights Reserved.
  * Provided under GPL.
  */
 #ifndef  GLOBALS__H
