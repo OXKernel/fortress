@@ -7,8 +7,8 @@ for reference.
 
 # security
 No claim is being made as to the security of this
-algorithm or it's implementation. Future research
-is needed.
+algorithm or it's implementation. The software is being provided AS-IS. 
+Future research is needed.
 
 # Author
 Roger Doss
