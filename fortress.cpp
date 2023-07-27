@@ -19,7 +19,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
 #include "GLOBALS.h"
+#include "password.h"
 
 /////global constants///////////////////////////////////////////////////////////
 const uint16 ROUNDS      =    16;
@@ -45,8 +49,8 @@ union sblock {                    // break up 32bit subblock
 /////function prototypes////////////////////////////////////////////////////////
 
 /////fortress cipher////
-void   Fortress(uint32 *data,size_t size,bool mode);
-void   fortress(uint32 *data,size_t size,uint16 *k);
+void   Fortress(const char *pass, const char *file, uint32 *data,size_t size,bool mode);
+void   fortress(uint32 *data, size_t size, uint16 *k);
 uint32 f(uint32 R, uint16 *key);
 
 
@@ -55,15 +59,14 @@ uint16 *KeyCreate(void);
 void   KeySchedule(uint16 *k);
 void   KeyDestroy(uint16  *k);
 void   KeyInverse(uint16  *ek,uint16  *dk);
-void   KeySave (uint16    *k);
-void   KeyRestore(uint16  *k);
+void   KeySave   (const char *pass, const char *file, uint16   *k);
+void   KeyRestore(const char *pass, const char *file, uint16   *k);
+void   cipher_key(const char *pass, bool mode, uint16 *k);
 
 /////math//////////////
 uint16 add(sint32 a, sint32 b);
 uint16 addinv(uint16 x);
 uint16 multiply(sint32 a, sint32 b);
-uint32 multinv(uint16 ro);
-void   extended_euclidean(sint32 a, sint32 b, sint32 *x, sint32 *y, sint32 *d);
 
 /////main///////////////////////////////////////////////////////////////////////
 int main(int argc,char **argv)
@@ -72,6 +75,7 @@ int main(int argc,char **argv)
    char  *data;
    size_t size;
    bool   mode;
+   char  *pass;
 
    if(argc != 3) {
          fprintf(stderr,"syntax:: fort filename -e|-d\n");
@@ -86,10 +90,17 @@ int main(int argc,char **argv)
          exit(-2);
    }
 
+   pass = get_password("enter password:");
+   char *retyped_pass = get_password("\nre-enter password:");
+   if(strcmp(pass, retyped_pass) != 0) {
+    fprintf(stderr, "\t %s ERROR DIFFERING PASSWORDS RECEIVED \n", argv[0]);
+    exit(-3);
+   }
+
    fp = fopen(argv[1],"rb");
    if(fp == NULL) {
          fprintf(stderr,"\t %s ERROR OPENING FILE FOR READ %s\n",argv[0],argv[1]);
-         exit(-1);
+         exit(-4);
    }
 
    fseek(fp,0,SEEK_END);
@@ -114,12 +125,12 @@ int main(int argc,char **argv)
    else
          fprintf(stdout,"%s DECRYPTING... \nFILE (%s) SIZE (%ld) bytes\n",argv[0],argv[1],size);
 
-   Fortress((uint32 *)data,size/4,mode);
+   Fortress(pass, argv[1], (uint32 *)data,size/4,mode);
    fp=fopen(argv[1],"wb");
    if(fp == NULL) {
          delete[] data;
          fprintf(stderr,"\t %s ERROR OPENING FILE FOR WRITE %s\n",argv[0],argv[1]);
-         exit(-3);
+         exit(-5);
    }
    if(mode == ENCRYPT) {
      fwrite(data,size,1,fp);
@@ -133,8 +144,10 @@ int main(int argc,char **argv)
      fwrite(data,size-offset,1,fp);
    }
    delete[] data;
+   delete[] pass;
    fclose(fp);
    return 0;
+
 }/* main() */
 
 #if 0
@@ -167,27 +180,27 @@ main()
 }
 #endif
 
-void Fortress(uint32 *data,size_t size,bool mode)
+void Fortress(const char *pass, const char *file, uint32 *data,size_t size,bool mode)
 {
       uint16 *ek, *dk;
       if((size % 2) != 0) {
           fprintf(stderr,"This implementation of fortress uses blocks of 64bits\n");
           fprintf(stderr,"Data must be a multiple of two uint32's\n");
-          exit(-4);
+          exit(-6);
       }
       if(mode == ENCRYPT) {
           /* encrypt */
           ek=KeyCreate();
           KeySchedule(ek);
           fortress(data,size,ek);
-          KeySave(ek);
+          KeySave(pass, file,ek);
           KeyDestroy(ek);
       }
       else {
            /* decrypt */
            ek=KeyCreate();
            dk=KeyCreate();
-           KeyRestore(ek);
+           KeyRestore(pass, file, ek);
            KeyInverse(ek,dk);
            KeyDestroy(ek);
            fortress(data,size,dk);
@@ -264,13 +277,22 @@ uint16 *KeyCreate(void)
 
 void KeySchedule(uint16 *k)
 {
-     uint16 i;
-     /* for now, use rand() (I know its insecure)
-      */
-      srand(time(NULL));
-      for(i=0;i<NOPERATIONS;i++)
-           k[i]=rand();
-
+    // Use /dev/urandom
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd < 0) {
+      char *error = strerror(errno);
+      fprintf(stderr," ERROR OPENING URANDOM DEVICE [%s]\n", error);
+      exit(-7);
+    } else {
+      ssize_t bytes = sizeof(uint16) * NOPERATIONS;
+      ssize_t bytes_in = read(fd, k, bytes);
+      if (bytes_in != bytes) {
+        char *error = strerror(errno);
+        fprintf(stderr, " ERROR READING FROM URANDOM DEVICE [%s]\n", error);
+        exit(-8);
+      }
+    }
+    close(fd);
 }/* KeySchedule() */
 
 void KeyDestroy(uint16 *k)
@@ -297,30 +319,49 @@ void KeyInverse(uint16 *ek,uint16 *dk)
 
 }/* KeyInverse() */
 
-void KeySave(uint16 *k)
+void cipher_key(const char *pass, bool mode, uint16 *k)
+{
+   char *key = (char *)k;
+   int ops = NOPERATIONS * 2;
+   for(int j = 0; j < ops; ++j) {
+     for(int i = 0; i < strlen(pass); ++i) {
+        key[j] ^= pass[i];
+     }
+   }
+}/* cipher_key() */
+
+void KeySave(const char *pass, const char *file, uint16 *k)
 {
    uint16   i;
    FILE   *fp;
 
-   fp = fopen("keysave","wb");
+   char *keysave = strdup(file);
+   strcat(keysave, ".key");
+   fp = fopen(keysave,"wb");
+   cipher_key(pass, ENCRYPT, k);
    if(fp != NULL) {
       for(i=0;i<NOPERATIONS;i++)
           fprintf(fp,"%d\t",k[i]);
       fclose(fp);
    }
+   free((void *)keysave);
 }/* KeySave() */
 
-void KeyRestore(uint16 *k)
+void KeyRestore(const char *pass, const char *file, uint16 *k)
 {
     uint16 i;
     FILE *fp;
 
-    fp = fopen("keysave","rb");
+    char *keysave = strdup(file);
+    strcat(keysave, ".key");
+    fp = fopen(keysave,"rb");
     if(fp != NULL) {
          for(i=0;i<NOPERATIONS;i++)
             fscanf(fp,"%hd",&k[i]);
          fclose(fp);
     }
+    cipher_key(pass, DECRYPT, k);
+    free((void *)keysave);
 }/* KeyRestore() */
 
 /////math functions follow  //////////////////////////////////////////////////////
@@ -354,33 +395,3 @@ uint16 multiply(sint32 a, sint32 b)
   if (a == b) return 1;
   return 0;
 }/* multiply() */
-
-//this function calculates the multiplicative inverse of a number
-//'ro' mod 65537 and calls extended_euclidean(...) to do the work
-uint32 multinv(uint16 ro)
-{
-  sint32 d, a = 65537l, b = ro, x, y;
-
-  if (ro == 0) return 65536l;
-  extended_euclidean(a, b, &x, &y, &d);
-  if (y >= 0) return (uint16) y;
-  return (uint16) (y + 65537l);
-}/* multinv() */
-
-void extended_euclidean(sint32 a, sint32 b, sint32 *x, sint32 *y, sint32 *d)
-{
-  sint32 q, r, x1, x2, y1, y2;
-
-  if (b == 0) {
-	 *d = a, *x = 1, *y = 0;
-	 return;    //return at this point, we have found the multiplicative inverse
-  }
-  x2 = 1, x1 = 0, y2 = 0, y1 = 1;
-  while (b > 0) {
-	 q = a / b, r = a - q * b;
-	 *x = x2 - q * x1;
-	 *y = y2 - q * y1;
-	 a = b, b = r, x2 = x1, x1 = *x, y2 = y1, y1 = *y;
-  }
-  *d = a, *x = x2, *y = y2;
-}/* extended_euclidean() */
