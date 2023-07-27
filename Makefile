@@ -1,5 +1,5 @@
-OBJS=fortress.o base64.o password.o
+OBJS=fortress.o password.o
 ALL: $(OBJS)
-	g++ fortress.o base64.o password.o -o fortress
+	g++ fortress.o password.o -o fortress
 clean:
-	rm -f fortress.o base64.o password.o fortress
+	rm -f fortress.o password.o fortress
