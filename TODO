@@ -1,0 +1,3 @@
+[0] add password encoding of the generated key
+[1] add base64
+[2] add urandom read
